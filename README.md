@@ -178,6 +178,7 @@ Domain additions and removals always require confirmation. `--force` can move a 
 vercel-axi dns list
 vercel-axi dns list example.com --limit 100
 vercel-axi dns inspect rec_123
+vercel-axi dns inspect rec_123 --json
 vercel-axi dns add example.com api A 198.51.100.100 --confirm
 vercel-axi dns add example.com @ MX mail.example.com 10 --confirm
 vercel-axi dns remove rec_123 --confirm
