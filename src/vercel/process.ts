@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { AxiError } from "../output/errors.js";
 
 const ANSI = /\u001b\[[0-?]*[ -/]*[@-~]/g;
-const AUTH_ERROR = /(not authenticated|not logged in|log in|login|invalid token|unauthorized|authentication)/i;
+const AUTH_ERROR = /(not authenticated|not logged in|vercel login|token is not valid|invalid token|unauthorized)/i;
 
 export interface VercelResult {
   stdout: string;
@@ -40,6 +40,7 @@ export function runVercel(args: string[], input?: string, secrets: string[] = []
     env: process.env,
     input,
     stdio: [input === undefined ? "inherit" : "pipe", "pipe", "pipe"],
+    maxBuffer: 64 * 1024 * 1024,
   });
 
   if (result.error) {

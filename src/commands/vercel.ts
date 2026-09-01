@@ -307,10 +307,13 @@ export const dnsInspect = command(
     name: "dns inspect",
     summary: "Inspect a DNS record",
     args: [{ name: "record-id", required: true, description: "DNS record ID" }],
-    flags: [...scopeFlags],
-    examples: ["vercel-axi dns inspect rec_123"],
+    flags: [jsonFlag, ...scopeFlags],
+    examples: ["vercel-axi dns inspect rec_123", "vercel-axi dns inspect rec_123 --json"],
   },
-  (parsed) => execute(["dns", "inspect", parsed.positionals[0]!], parsed),
+  (parsed) => {
+    const args = ["dns", "inspect", parsed.positionals[0]!, "--json"];
+    return execute(args, parsed, { json: enabled(parsed, "json") });
+  },
 );
 
 export const dnsAdd = command(
@@ -369,6 +372,12 @@ export const envAdd = command(
     requireConfirm(parsed, `add environment variable ${parsed.positionals[0]} to ${parsed.positionals[1] ?? "selected environments"}`);
     if (!enabled(parsed, "value-stdin")) {
       throw new UsageError("environment variable value input is required", "pipe the value on stdin and add --value-stdin");
+    }
+    if (process.stdin.isTTY) {
+      throw new UsageError(
+        "environment variable value must be piped on stdin",
+        "pipe the value, for example: printf '%s' \"$VALUE\" | vercel-axi env add NAME production --value-stdin --confirm",
+      );
     }
     const input = readFileSync(0, "utf8");
     if (input.length === 0) {

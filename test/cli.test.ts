@@ -4,15 +4,18 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { envAdd } from "../src/commands/vercel.js";
+import { parseArgs } from "../src/cli/args.js";
 
 const bin = fileURLToPath(new URL("../bin/vercel-axi.js", import.meta.url));
 const mock = fileURLToPath(new URL("./fixtures/vercel-mock.mjs", import.meta.url));
 const temporaryDirectories: string[] = [];
 
 interface RunOptions {
-  error?: "auth" | "generic" | "secret";
+  error?: "auth" | "generic" | "secret" | "domain-login";
   token?: string;
   input?: string;
+  large?: boolean;
 }
 
 function run(args: string[] = [], options: RunOptions = {}) {
@@ -28,9 +31,11 @@ function run(args: string[] = [], options: RunOptions = {}) {
       MOCK_VERCEL_CALL_FILE: callFile,
       MOCK_VERCEL_ERROR: options.error,
       MOCK_VERCEL_STDIN_FILE: stdinFile,
+      MOCK_VERCEL_LARGE: options.large ? "1" : undefined,
       VERCEL_TOKEN: options.token,
     },
     input: options.input,
+    maxBuffer: 64 * 1024 * 1024,
   });
   let call: string[] | undefined;
   try {
@@ -68,7 +73,7 @@ const successCases: Array<{ name: string; args: string[]; underlying: string[] }
   { name: "domain add", args: ["domain", "add", "example.com", "my-app", "--confirm"], underlying: ["domains", "add", "example.com", "my-app"] },
   { name: "domain remove", args: ["domain", "remove", "example.com", "--confirm"], underlying: ["domains", "remove", "example.com", "--yes"] },
   { name: "dns list", args: ["dns", "list", "example.com"], underlying: ["dns", "list", "example.com"] },
-  { name: "dns inspect", args: ["dns", "inspect", "rec_123"], underlying: ["dns", "inspect", "rec_123"] },
+  { name: "dns inspect", args: ["dns", "inspect", "rec_123"], underlying: ["dns", "inspect", "rec_123", "--json"] },
   { name: "dns add", args: ["dns", "add", "example.com", "api", "A", "198.51.100.1", "--confirm"], underlying: ["dns", "add", "example.com", "api", "A", "198.51.100.1"] },
   { name: "dns remove", args: ["dns", "remove", "rec_123", "--confirm"], underlying: ["dns", "remove", "rec_123", "--yes"] },
   { name: "env list", args: ["env", "list", "production", "--project", "my-app"], underlying: ["env", "list", "production", "--project", "my-app", "--json"] },
@@ -188,6 +193,38 @@ describe("secrets and JSON", () => {
     const result = run(["project", "list", "--json"]);
     expect(JSON.parse(result.stdout)).toEqual({ items: [{ name: "example", value: "secret-value" }], value: "top-secret" });
   });
+
+  it("forwards --json to the official CLI for dns inspect and passes the raw output through", () => {
+    const result = run(["dns", "inspect", "rec_123", "--json"]);
+    expect(result.status).toBe(0);
+    expect(result.call).toEqual(["dns", "inspect", "rec_123", "--json", "--no-color", "--non-interactive"]);
+    expect(JSON.parse(result.stdout)).toEqual({ items: [{ name: "example", value: "secret-value" }], value: "top-secret" });
+  });
+});
+
+describe("large subprocess output", () => {
+  it("captures multi-megabyte official CLI output without truncation", () => {
+    const result = run(["project", "list", "--json"], { large: true });
+    expect(result.status).toBe(0);
+    const parsed = JSON.parse(result.stdout);
+    expect(parsed.items).toHaveLength(60000);
+    expect(parsed.items.at(-1)).toEqual({ name: "item-59999", value: "x".repeat(30) });
+  });
+});
+
+describe("authentication error classification", () => {
+  it("reports a clear authentication error for real Vercel auth failures", () => {
+    const result = run(["project", "list"], { error: "auth" });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("Vercel authentication required");
+  });
+
+  it("does not misclassify an unrelated failure that merely contains the word login", () => {
+    const result = run(["domain", "inspect", "login.example.com"], { error: "domain-login" });
+    expect(result.status).toBe(1);
+    expect(result.stdout).not.toContain("Vercel authentication required");
+    expect(result.stdout).toContain("Domain not found by login.example.com");
+  });
 });
 
 describe("AXI behavior", () => {
@@ -245,5 +282,17 @@ describe("AXI behavior", () => {
     expect(result.stdout).toContain("Vercel authentication required");
     expect(result.stdout).toContain("vercel login");
     expect(result.stdout).toContain("VERCEL_TOKEN");
+  });
+
+  it("fails fast instead of blocking when env add stdin is an interactive TTY", () => {
+    const parsed = parseArgs(["API_TOKEN", "production", "--value-stdin", "--confirm"], envAdd.spec);
+    const original = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    try {
+      expect(() => envAdd.run(parsed)).toThrow(/stdin/i);
+    } finally {
+      if (original) Object.defineProperty(process.stdin, "isTTY", original);
+      else delete (process.stdin as { isTTY?: boolean }).isTTY;
+    }
   });
 });
